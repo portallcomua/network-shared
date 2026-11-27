@@ -16,7 +16,7 @@ from wsgidav.wsgidav_app import WsgiDAVApp
 from cheroot import wsgi
 
 
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.1.0"
 HTTP_PORT_DEFAULT = 8080
 HTTP_PORT_MAX = 8099
 DISCOVERY_PORT = 37020
@@ -84,6 +84,28 @@ def get_local_ip():
         sock.close()
 
 
+
+def ensure_firewall_rules():
+    """Create inbound firewall rules after one Windows UAC approval."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    ps = (
+        "$rules=@(@{Name='Network Shared UDP';Protocol='UDP';Port='37020'},"
+        "@{Name='Network Shared TCP';Protocol='TCP';Port='8080-8099'});"
+        "foreach($r in $rules){if(-not (Get-NetFirewallRule -DisplayName $r.Name -ErrorAction SilentlyContinue)){"
+        "New-NetFirewallRule -DisplayName $r.Name -Direction Inbound -Action Allow "
+        "-Protocol $r.Protocol -LocalPort $r.Port -Profile Any | Out-Null}}"
+    )
+    try:
+        import base64
+        encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+        outer = "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -EncodedCommand " + encoded + "'"
+        subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", outer],
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        pass
+
+
 class NetworkDiscovery:
     """UDP broadcast discovery: every running app listens; servers announce themselves."""
 
@@ -99,6 +121,7 @@ class NetworkDiscovery:
         self.http_port = HTTP_PORT_DEFAULT
         self.listener_thread = None
         self.beacon_thread = None
+        self.listener_error = ""
 
     def start(self):
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
@@ -173,7 +196,7 @@ class NetworkDiscovery:
                         "id": str(data.get("id", "")),
                         "name": str(data.get("name") or address[0]),
                         "ip": address[0],
-                        "port": int(data.get("port", HTTP_PORT)),
+                        "port": int(data.get("port", HTTP_PORT_DEFAULT)),
                         "share": str(data.get("share") or "Спільна папка"),
                         "version": str(data.get("version") or ""),
                         "last_seen": time.time(),
@@ -184,9 +207,10 @@ class NetworkDiscovery:
                         self.peers[peer["id"]] = peer
                 except (ValueError, TypeError, UnicodeDecodeError):
                     continue
-        except OSError:
-            # The GUI will still work; a status hint is shown by the caller.
-            pass
+        except OSError as exc:
+            self.listener_error = str(exc)
+            if self.on_change:
+                self.on_change()
         finally:
             sock.close()
 
@@ -389,11 +413,14 @@ class NetworkSharedApp:
         self.is_running = False
         self.shared_folder = os.path.join(application_dir(), "SharedDisk")
         os.makedirs(self.shared_folder, exist_ok=True)
+        ensure_firewall_rules()
         self.discovery = NetworkDiscovery()
+        self.discovery.on_change = self._discovery_changed
         self.discovery.start()
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.after(700, self.start_server)
         self.root.after(1000, self.refresh_peers)
 
     def _build_ui(self):
@@ -449,12 +476,18 @@ class NetworkSharedApp:
         self.connect_btn.pack(fill="x", pady=(8, 0))
 
         self.status_var = tk.StringVar(
-            value="Пошук у локальній мережі активний. Запустіть доступ на іншому комп'ютері."
+            value="Автоматично відкриваємо спільну папку та шукаємо інший комп'ютер..."
         )
         tk.Label(
             self.root, textvariable=self.status_var, anchor="w",
             fg="#555", wraplength=610, justify="left"
         ).pack(fill="x", padx=20, pady=(0, 12))
+
+    def _discovery_changed(self):
+        try:
+            self.root.after(0, self.refresh_peers)
+        except Exception:
+            pass
 
     def choose_folder(self):
         folder = filedialog.askdirectory(initialdir=self.shared_folder)
@@ -589,9 +622,12 @@ class NetworkSharedApp:
             index = self.peer_ids.index(selected_id)
             self.peer_list.selection_set(index)
         if not peers:
-            self.status_var.set(
-                "Комп'ютерів поки не знайдено. Перевірте, що на іншому ПК запущено Network Shared і відкрито доступ."
-            )
+            if self.discovery.listener_error:
+                self.status_var.set("Помилка пошуку: " + self.discovery.listener_error)
+            elif self.is_running:
+                self.status_var.set("Спільна папка відкрита. Очікуємо інший комп'ютер...")
+            else:
+                self.status_var.set("Запускаємо спільний доступ...")
         elif self.status_var.get().startswith("Комп'ютерів поки не знайдено"):
             self.status_var.set(f"Знайдено комп'ютерів: {len(peers)}. Оберіть потрібний і натисніть «Підключитися».")
         self.root.after(1000, self.refresh_peers)
