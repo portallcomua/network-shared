@@ -17,7 +17,8 @@ from cheroot import wsgi
 
 
 APP_VERSION = "2.0.0"
-HTTP_PORT = 8080
+HTTP_PORT_DEFAULT = 8080
+HTTP_PORT_MAX = 8099
 DISCOVERY_PORT = 37020
 DISCOVERY_INTERVAL = 3
 PEER_TIMEOUT = 12
@@ -95,6 +96,7 @@ class NetworkDiscovery:
         self.stop_event = threading.Event()
         self.sharing = False
         self.share_name = ""
+        self.http_port = HTTP_PORT_DEFAULT
         self.listener_thread = None
         self.beacon_thread = None
 
@@ -104,9 +106,11 @@ class NetworkDiscovery:
         self.beacon_thread = threading.Thread(target=self._beacon, daemon=True)
         self.beacon_thread.start()
 
-    def set_sharing(self, enabled, share_name=""):
+    def set_sharing(self, enabled, share_name="", http_port=None):
         self.sharing = bool(enabled)
         self.share_name = share_name if enabled else ""
+        if http_port is not None:
+            self.http_port = int(http_port)
         self._broadcast()
 
     def stop(self):
@@ -120,7 +124,7 @@ class NetworkDiscovery:
             "id": self.device_id,
             "name": self.hostname,
             "ip": get_local_ip(),
-            "port": HTTP_PORT,
+            "port": self.http_port,
             "sharing": self.sharing,
             "share": self.share_name,
             "time": int(time.time()),
@@ -472,29 +476,62 @@ class NetworkSharedApp:
                 messagebox.showerror("Network Shared", f"Не вдалося відкрити папку:\n{exc}")
                 return
 
-        config = {
-            "host": "0.0.0.0",
-            "port": HTTP_PORT,
-            "provider_mapping": {"/": self.shared_folder},
-            "simple_dc": {"user_mapping": {"*": True}},
-            "dir_browser": {"enable": False},
-            "verbose": 0,
-        }
         try:
-            self.server = wsgi.Server((config["host"], config["port"]), WsgiDAVApp(config))
+            # Start with the preferred port, then automatically try the next
+            # ports. This avoids conflicts with Apache, Nginx, UAServer, etc.
+            last_error = None
+            for port in range(HTTP_PORT_DEFAULT, HTTP_PORT_MAX + 1):
+                config = {
+                    "host": "0.0.0.0",
+                    "port": port,
+                    "provider_mapping": {"/": self.shared_folder},
+                    "simple_dc": {"user_mapping": {"*": True}},
+                    "dir_browser": {"enable": False},
+                    "verbose": 0,
+                }
+                candidate = wsgi.Server(
+                    (config["host"], config["port"]), WsgiDAVApp(config)
+                )
+                try:
+                    # Bind synchronously so a busy port is detected before
+                    # the UI announces that sharing has started.
+                    candidate.bind()
+                    self.server = candidate
+                    self.http_port = port
+                    break
+                except OSError as bind_error:
+                    last_error = bind_error
+                    try:
+                        candidate.stop()
+                    except Exception:
+                        pass
+            else:
+                raise OSError(
+                    f"Не знайдено вільний порт у діапазоні "
+                    f"{HTTP_PORT_DEFAULT}-{HTTP_PORT_MAX}. Остання помилка: {last_error}"
+                )
+
             self.server_thread = threading.Thread(target=self._run_server, daemon=True)
             self.server_thread.start()
             self.is_running = True
-            self.discovery.set_sharing(True, os.path.basename(self.shared_folder))
+            self.discovery.set_sharing(
+                True, os.path.basename(self.shared_folder), self.http_port
+            )
             self.toggle_btn.config(text="⏹  ЗУПИНИТИ СПІЛЬНИЙ ДОСТУП", bg="#c82333")
             self.browse_btn.config(state="disabled")
             self.server_status.set(
-                f"Доступ відкрито: http://{get_local_ip()}:{HTTP_PORT}  •  Комп'ютер видно іншим учасникам мережі."
+                f"Доступ відкрито: http://{get_local_ip()}:{self.http_port}  •  "
+                f"Комп'ютер видно іншим учасникам мережі."
             )
-            self.status_var.set("Очікуємо підключення інших комп'ютерів...")
+            self.status_var.set(f"Очікуємо підключення інших комп'ютерів. Порт: {self.http_port}")
         except Exception as exc:
             self.server = None
-            messagebox.showerror("Network Shared — Помилка", f"Не вдалося запустити сервер:\n{exc}")
+            self.is_running = False
+            messagebox.showerror(
+                "Network Shared — Помилка",
+                f"Не вдалося запустити сервер.\n"
+                f"Перевірено порти {HTTP_PORT_DEFAULT}-{HTTP_PORT_MAX}.\nДеталі: {exc}"
+            )
 
     def _run_server(self):
         try:
