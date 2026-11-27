@@ -1,6 +1,7 @@
 import os
 import sys
 import socket
+import tempfile
 import threading
 import subprocess
 import tkinter as tk
@@ -10,7 +11,6 @@ from cheroot import wsgi
 
 
 def resource_path(relative_path):
-    """Отримує шлях до вшитих ресурсів (іконки) всередині EXE."""
     try:
         base_path = sys._MEIPASS
     except Exception:
@@ -19,7 +19,6 @@ def resource_path(relative_path):
 
 
 def create_desktop_shortcut():
-    """При першому запуску створює ярлик програми на Робочому столі."""
     if not getattr(sys, "frozen", False):
         return
 
@@ -70,7 +69,6 @@ class NetworkSharedApp:
         self.shared_folder = os.path.abspath("SharedDisk")
         os.makedirs(self.shared_folder, exist_ok=True)
 
-        # Вибір папки
         tk.Label(root, text="1. Оберіть папку або диск для спільного доступу:", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=20, pady=(15, 5))
 
         folder_frame = tk.Frame(root)
@@ -83,14 +81,12 @@ class NetworkSharedApp:
         self.browse_btn = tk.Button(folder_frame, text="Огляд...", command=self.choose_folder, width=10)
         self.browse_btn.pack(side="right", padx=(8, 0))
 
-        # Кнопка запуску
         self.toggle_btn = tk.Button(
             root, text="▶ Запустити Network Shared", bg="#28a745", fg="white",
             font=("Segoe UI", 11, "bold"), command=self.toggle_server, height=2
         )
         self.toggle_btn.pack(fill="x", padx=20, pady=18)
 
-        # Блок з адресою підключення
         tk.Label(root, text="2. Адреса для підключення на інших комп'ютерах:", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=20)
 
         url_frame = tk.Frame(root)
@@ -130,12 +126,16 @@ class NetworkSharedApp:
 
     def start_server(self):
         port = 8080
+        # Створюємо гарантовано існуючу папку для htdocs, щоб wsgidav не видавав помилку в EXE
+        dummy_htdocs = os.path.join(tempfile.gettempdir(), "network_shared_htdocs")
+        os.makedirs(dummy_htdocs, exist_ok=True)
+
         config = {
             "host": "0.0.0.0",
             "port": port,
             "provider_mapping": {"/": self.shared_folder},
             "simple_dc": {"user_mapping": {"*": True}},
-            "dir_browser": {"enable": False},
+            "dir_browser": {"enable": False, "htdocs_path": dummy_htdocs},
             "verbose": 0,
         }
         try:
