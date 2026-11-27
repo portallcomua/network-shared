@@ -249,9 +249,13 @@ class RemoteFolderWindow:
         self.refresh()
 
     def _url(self, path=None):
-        path = self.current_path if path is None else path
+        # Current directory URLs end with slash; file URLs must not,
+        # otherwise WebDAV PUT/GET targets a directory collection.
+        is_current_directory = path is None
+        path = self.current_path if is_current_directory else path
         encoded = quote(path.strip("/"), safe="/")
-        return f'http://{self.peer["ip"]}:{self.peer["port"]}/' + (encoded + "/" if encoded else "")
+        suffix = encoded + ("/" if is_current_directory and encoded else "")
+        return f'http://{self.peer["ip"]}:{self.peer["port"]}/' + suffix
 
     def refresh(self):
         try:
