@@ -16,7 +16,7 @@ from wsgidav.wsgidav_app import WsgiDAVApp
 from cheroot import wsgi
 
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.2"
 HTTP_PORT_DEFAULT = 8080
 HTTP_PORT_MAX = 8099
 DISCOVERY_PORT = 37020
@@ -489,22 +489,25 @@ class NetworkSharedApp:
                     "dir_browser": {"enable": False},
                     "verbose": 0,
                 }
-                candidate = wsgi.Server(
-                    (config["host"], config["port"]), WsgiDAVApp(config)
-                )
+                # Cheroot binds its listening socket inside start().
+                # Probe the port with a temporary standard socket instead:
+                # cheroot.wsgi.Server does not expose the bind() method used
+                # in the previous build.
+                probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
-                    # Bind synchronously so a busy port is detected before
-                    # the UI announces that sharing has started.
-                    candidate.bind()
-                    self.server = candidate
-                    self.http_port = port
-                    break
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    probe.bind(("0.0.0.0", port))
                 except OSError as bind_error:
                     last_error = bind_error
-                    try:
-                        candidate.stop()
-                    except Exception:
-                        pass
+                    continue
+                finally:
+                    probe.close()
+
+                self.server = wsgi.Server(
+                    (config["host"], config["port"]), WsgiDAVApp(config)
+                )
+                self.http_port = port
+                break
             else:
                 raise OSError(
                     f"Не знайдено вільний порт у діапазоні "
