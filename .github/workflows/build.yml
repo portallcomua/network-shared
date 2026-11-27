@@ -2,13 +2,12 @@ name: Build Network Shared EXE
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, "feature/**" ]
   workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
-
     steps:
       - name: Завантаження коду
         uses: actions/checkout@v4
@@ -16,19 +15,22 @@ jobs:
       - name: Налаштування Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Встановлення бібліотек
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Збірка EXE з власною іконкою
+      - name: Перевірка синтаксису
+        run: python -m py_compile network_shared.py
+
+      - name: Збірка EXE
         run: |
-          pyinstaller --noconsole --onefile --collect-all wsgidav --icon=icon.ico --add-data "icon.ico;." --name network-shared network_shared.py
+          pyinstaller --noconfirm --clean --noconsole --onefile --collect-all wsgidav --collect-all cheroot --collect-all requests --icon=icon.ico --add-data "icon.ico;." --name Network-Shared network_shared.py
 
       - name: Збереження готового EXE
         uses: actions/upload-artifact@v4
         with:
           name: Network-Shared-Windows
-          path: dist/network-shared.exe
+          path: dist/Network-Shared.exe
