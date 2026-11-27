@@ -25,7 +25,7 @@ jobs:
 
       - name: Збірка EXE з власною іконкою
         run: |
-          pyinstaller --noconsole --onefile --icon=icon.ico --add-data "icon.ico;." --name network-shared network_shared.py
+          pyinstaller --noconsole --onefile --collect-all wsgidav --icon=icon.ico --add-data "icon.ico;." --name network-shared network_shared.py
 
       - name: Збереження готового EXE
         uses: actions/upload-artifact@v4
