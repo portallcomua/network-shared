@@ -1,10 +1,54 @@
 import os
+import sys
 import socket
 import threading
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from wsgidav.wsgidav_app import WsgiDAVApp
 from cheroot import wsgi
+
+
+def resource_path(relative_path):
+    """Отримує шлях до вшитих ресурсів (іконки) всередині EXE."""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+def create_desktop_shortcut():
+    """При першому запуску створює ярлик програми на Робочому столі."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    exe_path = sys.executable
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.exists(desktop):
+        desktop = os.path.join(os.path.expanduser("~"), "Робочий стіл")
+
+    shortcut_path = os.path.join(desktop, "Network Shared.lnk")
+    if os.path.exists(shortcut_path):
+        return
+
+    ps_script = (
+        f'$ws = New-Object -ComObject WScript.Shell; '
+        f'$s = $ws.CreateShortcut("{shortcut_path}"); '
+        f'$s.TargetPath = "{exe_path}"; '
+        f'$s.WorkingDirectory = "{os.path.dirname(exe_path)}"; '
+        f'$s.IconLocation = "{exe_path},0"; '
+        f'$s.Description = "Network Shared — Мережевий диск"; '
+        f'$s.Save()'
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_script],
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except Exception:
+        pass
 
 
 class NetworkSharedApp:
@@ -13,6 +57,13 @@ class NetworkSharedApp:
         self.root.title("Network Shared — Мережевий диск")
         self.root.geometry("460x290")
         self.root.resizable(False, False)
+
+        icon_file = resource_path("icon.ico")
+        if os.path.exists(icon_file):
+            try:
+                self.root.iconbitmap(icon_file)
+            except Exception:
+                pass
 
         self.server = None
         self.is_running = False
@@ -84,6 +135,7 @@ class NetworkSharedApp:
             "port": port,
             "provider_mapping": {"/": self.shared_folder},
             "simple_dc": {"user_mapping": {"*": True}},
+            "dir_browser": {"enable": False},
             "verbose": 0,
         }
         try:
@@ -122,6 +174,7 @@ class NetworkSharedApp:
 
 
 if __name__ == "__main__":
+    create_desktop_shortcut()
     root = tk.Tk()
     app = NetworkSharedApp(root)
     root.mainloop()
