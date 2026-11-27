@@ -23,9 +23,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Збірка EXE без консольного вікна
+      - name: Збірка EXE з власною іконкою
         run: |
-          pyinstaller --noconsole --onefile --name network-shared network_shared.py
+          pyinstaller --noconsole --onefile --icon=icon.ico --add-data "icon.ico;." --name network-shared network_shared.py
 
       - name: Збереження готового EXE
         uses: actions/upload-artifact@v4
